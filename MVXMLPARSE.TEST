@@ -1,0 +1,138 @@
+* BUILD OR PARSE INITIAL XML *
+    XML='<?xml version="1.0" ?>'
+    XML<-1>='<my_xml><info/></my_xml>'
+    CONVERT CHAR(254) TO CHAR(10) IN XML
+    ACTION='PARSE'
+    ACTION<2>=XML
+    OPTIONS=''
+    CALL MVXMLPARSE.API('PARSE','',XML,XML.TREE,ERR)
+    PRINT 'PARSING ':XML
+    GOSUB show.xml
+
+
+
+* INSERT ATTRIBUTE
+* THE -ADD OPTION TELLS IT TO ADD THE ATTRIBUTE IF IT DOES NOT
+* EXIST
+
+    PRINT "Adding name=patrick to first info node"
+
+    ACTION='REPLACE-ADD'
+    ACTION<2>='<info>'
+    ACTION<3>='(name)=Patrick'
+    CALL MVXMLPARSE.API(ACTION,'',XML.TREE,OUT.XML,ERR)
+GOSUB show.xml
+
+    PRINT "Add title to first node"
+    ACTION="REPLACE-ADD"
+    ACTION<2>='<info>'
+    ACTION<3>='(title)=talker'
+    CALL MVXMLPARSE.API(ACTION,"",XML.TREE,OUT.XML,ERR)
+GOSUB show.xml
+
+
+* INSERT XML AT LOCATION
+* INSERT-{POS}-{TYPE}
+* WHERE POS=START OR END
+* WHERE TYPE=XML OR LEAVE BLANK
+    XML='<info name="Michael">Info on Michael</info>'
+    PRINT 'Doing INSERT-START-XML to <my_xml> and adding ':XML
+
+    ACTION='INSERT-START-XML'
+    ACTION<2>='<my_xml>'
+    ACTION<4>=OCONV(XML,'MX'); * ALWAYS TO HEX TO ALLOW ANYTHING
+    CALL MVXMLPARSE.API(ACTION,'',XML.TREE,OUT.XML,ERR)
+GOSUB show.xml
+
+
+* INSERT NEW ENTIRE XML NODE *
+    XML='<info name="Bob">more info on bob</info>'
+
+    PRINT "Doing Insert-end to <my_xml> adding ":XML
+    PRINT "Note: XML was first parsed into a object and then inserted (notice no XML on command)"
+* LETS FIRST CONVERT THIS INTO A XML OBJECT
+    CALL MVXMLPARSE.API('PARSE','',XML,SUB.XML.TREE,ERR)
+* LETS NOW INSERT THIS XML OBJECT (NOT XML STRING) INTO MASTER XML TREE
+    ACTION='INSERT-END'
+    ACTION<2>='<my_xml>'
+    ACTION<4>=OCONV(SUB.XML.TREE,"MX")
+    CALL MVXMLPARSE.API(ACTION,'',XML.TREE,OUT.XML,ERR)
+   GOSUB show.xml
+
+
+* THE ABOVE WAS TO DEMONSTRATE HOW YOU COULD INSERT OBJECTS
+* INTO EACH OTHER, WE COULD HAVE ALWAYS DONE THIS WITH A STRAIGHT INSERT
+* AS
+    XML='<info name="Jennifer">info on jennifer</info>'
+    PRINT "INSERT-END-XML to <my_xml> of direct xml ":XML
+    ACTION='INSERT-END-XML'
+    ACTION<2>='<my_xml>'
+    ACTION<4>=OCONV(XML,'MX')
+    CALL MVXMLPARSE.API(ACTION,'',XML.TREE,OUT.XML,ERR)
+GOSUB show.xml
+
+   PRINT;PRINT STR('-',60)
+
+* LETS RETRIEVE SOME INFORMATION
+    PRINT "RETRIEVE name and innerhtml from first info node"
+    ACTION='RETRIEVE'
+    ACTION<2>='<info>[1]'
+    ACTION<3>='(name)'
+    ACTION<3,2>='@INNERHTML@'
+    CALL MVXMLPARSE.API(ACTION,'',XML.TREE,OUT.XML,ERR)
+    PRINT "name=":OUT.XML<2,1>
+    PRINT "innerhtml=":OUT.XML<2,2>
+
+    PRINT; PRINT STR('-',60)
+* LETS DO IT ON VAR NAMES
+    PRINT "Retrieving info where name=Jennifer.  Returning innerhtml"
+    ACTION='RETRIEVE'
+    ACTION<2>='<info>(name)=Jennifer'
+    ACTION<3>='@INNERHTML@'
+    CALL MVXMLPARSE.API(ACTION,'',XML.TREE,OUT.XML,ERR)
+    PRINT "innerhtml=":OUT.XML<2,1>
+
+    PRINT; PRINT STR('-',60)
+* LETS PULL AN ENTIRE NODE
+    PRINT "Pulling full info[2] node"
+    ACTION='NODE'
+    ACTION<2>='<info>[2]'
+    CALL MVXMLPARSE.API(ACTION,'',XML.TREE,OUT.XML,ERR)
+    PRINT "NODE=":OUT.XML
+
+    PRINT; PRINT STR('-',60)
+    PRINT 'PARSING RETURNED NODE BACK TO XML'
+* LETS CONVERT THIS NODE INFO BACK TO XML
+    CALL MVXMLPARSE.API('REBUILD','',OUT.XML,TEMP.XML,ERR)
+    PRINT TEMP.XML
+
+    PRINT; PRINT STR('-',60)
+    PRINT 'DELETE NODE???'
+
+* LETS PULL THE NODE AND DELETE IT
+    ACTION<1>='NODE-DELETE <info>[1]'
+    ACTION<2>='<info>[1]'
+    CALL MVXMLPARSE.API(ACTION,'',XML.TREE,OUT.XML,ERR)
+    GOSUB show.xml
+
+* LETS DELETE A ATTRIBUTE
+    PRINT 'DELETE ITEM <info>(name)=Jennifer'
+    ACTION='DELETE'
+    ACTION<2>='<info>(name)=Jennifer'
+    ACTION<3>='(name)'
+    CALL MVXMLPARSE.API(ACTION,'',XML.TREE,OUT.XML,ERR)
+    GOSUB show.xml
+
+* REBUILD XML
+    CALL MVXMLPARSE.API('REBUILD','',XML.TREE,NEW.XML,ERR)
+    CONVERT CHAR(10) TO CHAR(254) IN NEW.XML
+    PRINT NEW.XML
+    STOP
+
+show.xml: *
+CALL MVXMLPARSE.API('REBUILD','',XML.TREE,NEW.XML,ERR)
+PRINT NEW.XML
+INPUT WAIT
+PRINT STR('-',60)
+PRINT
+RETURN
