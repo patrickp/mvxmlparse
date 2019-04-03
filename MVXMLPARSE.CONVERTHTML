@@ -1,0 +1,155 @@
+    SUBROUTINE MVXMLPARSE.CONVERTHTML(CONV.TYPE,TEXT)
+*
+** THIS ROUTINE WILL CONVERT CHARACTERS WITHIN THE TEXT
+* 1.0 PAP 8.1 created IN-V1 that will convert / to text.  could not
+*             allow this conversion to happen always since it breaks
+*             some pages (where they have dates)
+*
+    IF NOT(ASSIGNED(TEXT)) THEN
+        TEXT = ""
+        RETURN
+    END
+*
+    NUM.C=4
+*
+    V.TABLE = "34":@VM:"38":@VM:"60":@VM:"62"
+    V.TABLE<2> = "&quot;":@VM:"&amp;":@VM:"&lt;":@VM:"&gt;"
+*
+    OUT.TABLE=V.TABLE
+    OUT.TABLE<1,-1> = "32"
+    OUT.TABLE<2,-1> = "&nbsp;"
+*
+    BEFORE.TXT=TEXT
+*
+    BEGIN CASE
+    CASE CONV.TYPE = "IN"
+        GOSUB 100
+    CASE CONV.TYPE = "IN-V1"
+        OUT.TABLE<1,-1> = "47"
+        OUT.TABLE<2,-1> = "&#47;"
+        GOSUB 100
+    CASE CONV.TYPE = "OUT"
+        GOSUB 200
+    END CASE
+*
+    RETURN
+*
+100       * CONVERT Into Quoted Text *
+*
+*FOR X=1 TO NUM.C
+*   LOOK.C=TABLE<1,X>
+*   CONVERT.C=TABLE<2,X>
+*   POS.CNTR=1
+*   LOOP
+*     POS=INDEX(TEXT,CHAR(LOOK.C),POS.CNTR)
+*   UNTIL NOT(POS) DO
+*     L=LEN(CONVERT.C)
+*     CHECK.TEXT=FIELD(TEXT[POS,10],';',1)
+*     IF CHECK.TEXT<>'' THEN CHECK.TEXT=CHECK.TEXT:';'
+*     LOCATE CHECK.TEXT IN TABLE<2> SETTING CHECK.POS ELSE CHECK.POS=0
+*     IF CHECK.POS THEN; * IGNORE THIS ITEM
+*         POS.CNTR=POS.CNTR+1
+*     END ELSE
+*        PRE.TEXT=TEXT[1,POS-1]
+*        AFT.TEXT=TEXT[POS+1,LEN(TEXT)]
+*        TEXT=PRE.TEXT:CONVERT.C:AFT.TEXT
+*     END
+*   REPEAT
+*NEXT X
+*LEFTOVER.TEXT=TEXT
+*TEXT=''
+*LOOP
+*   POS=INDEX(LEFTOVER.TEXT,'&',1)
+*UNTIL NOT(POS) DO
+*   L=LEN(LEFTOVER.TEXT)
+*   PRE.TEXT=LEFTOVER.TEXT[1,POS-1]
+*   AFT.TEXT=LEFTOVER.TEXT[POS,L]
+*   END.POS=INDEX(AFT.TEXT,';',1)
+*DEBUG
+*   IF NOT(END.POS) THEN
+*       TEXT=TEXT:LEFTOVER.TEXT
+*       LEFTOVER.TEXT=''
+*   END ELSE
+*       LOOK.TEXT=AFT.TEXT[1,END.POS]
+*       AFT.TEXT=AFT.TEXT[END.POS+1,L]
+*       *
+*       LOCATE LOOK.TEXT IN TABLE<2> SETTING FPOS ELSE FPOS=0
+*       IF FPOS THEN
+*          CONVERTED.TEXT=TABLE<1,FPOS>
+*       END ELSE
+*          CONVERTED.TEXT=LOOK.TEXT
+*       END
+*DEBUG
+*       TEXT=TEXT:PRE.TEXT:CONVERTED.TEXT
+*       LEFTOVER.TEXT=AFT.TEXT
+*   END
+*REPEAT
+*
+    L=LEN(TEXT)
+    NEW.TEXT = ""
+*
+    FOR X=1 TO L
+        C=TEXT[X,1]
+        CS=SEQ(C)
+        LOCATE CS IN V.TABLE<1> SETTING POS ELSE POS=0
+        IF POS THEN
+            NEW.TEXT=NEW.TEXT:V.TABLE<2,POS>
+        END ELSE
+            NEW.TEXT=NEW.TEXT:C
+        END
+    NEXT X
+*
+    TEXT=NEW.TEXT
+*
+    RETURN
+*
+200       * CONVERT FROM Quoted Text *
+*
+*FOR X=1 TO NUM.C
+*   LOOK.C=TABLE<2,X>
+*   CONVERT.C=TABLE<1,X>
+*   LOOP
+*      POS=INDEX(TEXT,LOOK.C,1)
+*   UNTIL NOT(POS) DO
+*      PRE.TEXT=TEXT[1,POS-1]
+*      AFT.TEXT=TEXT[POS+LEN(LOOK.C),LEN(TEXT)]
+*      TEXT=PRE.TEXT:CHAR(CONVERT.C):AFT.TEXT
+*   REPEAT
+*NEXT X
+*RETURN
+*
+    LEFTOVER.TEXT=TEXT
+*
+    TEXT = ""
+*
+    LOOP
+        POS=INDEX(LEFTOVER.TEXT,"&",1)
+    UNTIL NOT(POS) DO
+        L=LEN(LEFTOVER.TEXT)
+        PRE.TEXT=LEFTOVER.TEXT[1,POS-1]
+        AFT.TEXT=LEFTOVER.TEXT[POS,L]
+        END.POS=INDEX(AFT.TEXT,";",1)
+        IF NOT(END.POS) THEN
+            TEXT=TEXT:LEFTOVER.TEXT
+            LEFTOVER.TEXT = ""
+        END ELSE
+            LOOK.TEXT=AFT.TEXT[1,END.POS]
+            AFT.TEXT=AFT.TEXT[END.POS+1,L]
+*
+            LOCATE LOOK.TEXT IN OUT.TABLE<2> SETTING FPOS ELSE FPOS=0
+            IF FPOS THEN
+                CONVERTED.TEXT=OUT.TABLE<1,FPOS>
+                CONVERTED.TEXT=CHAR(CONVERTED.TEXT)
+            END ELSE
+*          CONVERTED.TEXT=LOOK.TEXT
+                CONVERTED.TEXT = "&"
+                AFT.TEXT=LOOK.TEXT[2,LEN(LOOK.TEXT)]:AFT.TEXT
+            END
+            TEXT=TEXT:PRE.TEXT:CONVERTED.TEXT
+            LEFTOVER.TEXT=AFT.TEXT
+        END
+    REPEAT
+*
+    TEXT=TEXT:LEFTOVER.TEXT
+*
+    RETURN
