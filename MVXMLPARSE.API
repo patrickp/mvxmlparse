@@ -1,0 +1,761 @@
+    SUBROUTINE MVXMLPARSE.API(ACTION,OPTIONS,IN.OBJ,OUT.OBJ,ERR)
+* 1.0 01/01 PAP - Created
+* 1.1 06/14 pap - Added [#] syntax
+* 1.2 08/03 pap - added @innerhtml@ and error on on retrieve
+* 1.3 08/05 pap - Added speed up code for large just.html section
+* 1.4 08/25 pap - Made retreive/insert code decode/encode data
+* 1.5 08/26 pap - Fixed replace-add on <request/> style tag
+* 1.6 08/26 pap - Fixed code to expand <request/> tag on insert xml
+* 1.7 09/02 pap - Fixed replace code to not do <tag newtag> but <tag newtag=""> if null value passed
+    OUT.OBJ=''
+    TREE.DEPTH=6
+    IF INDEX(OPTIONS,'DEBUG',1) THEN DO.DEBUG=1 ELSE DO.DEBUG=0
+    ERR=''
+    C=''; DOING.SCRIPT=''; HTML=''
+    PARSE.ACTION=ACTION<1>
+    CONVERT '-' TO CHAR(254) IN PARSE.ACTION
+    BEGIN CASE
+    CASE ACTION='CDATA'
+        LOCATE '!' IN IN.OBJ<1> SETTING FIND.POS ELSE FIND.POS=0
+        IF FIND.POS THEN
+            LOOK.DATA=IN.OBJ<2,FIND.POS>
+            CHOP.POS=INDEX(LOOK.DATA,'[',2)
+            LOOK.DATA=LOOK.DATA[CHOP.POS+1,LEN(LOOK.DATA)]
+            LOOK.DATA=FIELD(LOOK.DATA,']]>',1)
+            OUT.OBJ=LOOK.DATA
+        END ELSE
+            ERR='COULD NOT FIND CDATA SECTION'
+            OUT.OBJ=''
+        END
+    CASE FIELD(ACTION<1>,'-',1) = 'NODE'
+        SUB.ACTION=FIELD(ACTION<1>,'-',2)
+        SUB.OPTION=FIELD(ACTION<1>,'-',3)
+        SELECTION.CRITERIA=ACTION<2>
+        GOSUB xml.selection
+        IF TAG.FOUND THEN
+            LEVEL.INFO=IN.OBJ<5,TAG.FOUND>
+            GOSUB pull.node
+            OUT.OBJ=TEMP.NODE
+        END ELSE
+            ERR=-1
+            ERR<2>='NO ITEMS FOUND'
+        END
+    CASE PARSE.ACTION<1>='INSERT'
+        PARSE.LOCATION=PARSE.ACTION<2>
+        PARSE.TYPE=PARSE.ACTION<3>
+        IF PARSE.TYPE='XML' THEN
+* WE NEED TO PARSE THIS XML INTO A TREE
+            HTML=OCONV(ACTION<4>,'MY')
+            GOSUB parse.xml
+            PARSE.TREE=CONFIG
+        END ELSE
+            PARSE.TREE=OCONV(ACTION<4>,'MY')
+        END
+        BEGIN CASE
+        CASE ACTION<2>[1,1]='<'
+            SELECTION.CRITERIA=ACTION<2>
+            GOSUB xml.selection
+            IF TAG.FOUND THEN
+                GOSUB expand.tag
+                IF PARSE.LOCATION='START' THEN
+                    INSERT.POS=TAG.FOUND
+                END ELSE
+* WE NEED TO LOOP TO FIND NEXT TAG *
+                    SAVE.TAG.ID=IN.OBJ<5,TAG.FOUND>
+                    IN.OBJ<5,TAG.FOUND>='PLACEHOLDER'
+                    LOCATE SAVE.TAG.ID IN IN.OBJ<5> SETTING INSERT.POS ELSE INSERT.POS=0
+                    IN.OBJ<5,TAG.FOUND>=SAVE.TAG.ID
+                END
+            END ELSE
+                INSERT.POS=0
+            END
+            KEY.NAME=FIELD(ACTION<2>,'<',2)
+            KEY.NAME=FIELD(KEY.NAME,'>',1)
+            IF PARSE.LOCATION='END' THEN KEY.NAME='/':KEY.NAME
+            LOCATE KEY.NAME IN IN.OBJ<1> SETTING INSERT.POS ELSE INSERT.POS=0
+        CASE ACTION<2>[1,1]='%'
+            OBJ.ID=ACTION<2>[2,999]
+            LOCATE OBJ.ID IN IN.OBJ<5> SETTING INSERT.POS ELSE INSERT.POS=0
+        CASE 1; INSERT.POS=-1
+        END CASE
+        IF NOT(INSERT.POS) THEN
+            ERR=-1
+            ERR<2>='Could not locate insert point'
+        END ELSE
+            IF PARSE.LOCATION='START' THEN INSERT.POS=INSERT.POS+1
+            FOR A=1 TO TREE.DEPTH
+                IN.OBJ=INSERT(IN.OBJ,A,INSERT.POS;PARSE.TREE<A>)
+            NEXT A
+        END
+        SUB.ACTION='VERIFY'
+        CALL MVXMLPARSE.API(SUB.ACTION,'',IN.OBJ,OUT.OBJ,ERR)
+    CASE ACTION<1>='VERIFY'
+* THIS WILL VERIFY OUR XML TREE
+        NUMBER.ENTRIES=DCOUNT(IN.OBJ<1>,CHAR(253))
+        NEST.LEVEL=''
+        IN.OBJ<5>=''
+*      IN.OBJ<6>=''
+        FOR KEY.CNTR=1 TO NUMBER.ENTRIES
+            TAG=IN.OBJ<1,KEY.CNTR>
+            BEGIN CASE
+            CASE TAG='JUST.HTML' OR TAG='!'
+                OUT.LVL=NEST.LEVEL<1>
+                CONVERT CHAR(253) TO '.' IN OUT.LVL
+            CASE 1
+                FIRST.KEY=IN.OBJ<2,KEY.CNTR,1>
+                LOCATE '/' IN IN.OBJ<2,KEY.CNTR> SETTING AUTO.ENDING ELSE AUTO.ENDING=0
+                IF AUTO.ENDING THEN AUTO.ENDING=1
+                GOSUB xml.build.nest.level
+            END CASE
+            IN.OBJ<5,KEY.CNTR>=OUT.LVL
+*         PRINT KEY.CNTR"R(#3)":' ':
+*         PRINT TAG"L(#20)":" ":
+*         PRINT OUT.LVL"L(#20)"
+        NEXT KEY.CNTR
+    CASE ACTION<1>='PARSE'
+        HTML=IN.OBJ
+        GOSUB parse.xml
+        OUT.OBJ=CONFIG
+    CASE ACTION<1>='REBUILD'
+        CONFIG=IN.OBJ
+        GOSUB rebuild.xml
+        OUT.OBJ=NEW.HTML
+    CASE PARSE.ACTION<1>='REPLACE'
+*DEBUG
+* ACTION<2>=SELECTION CRITERIA
+* VALUE OUT
+* TAG{TAG NAME}=VALUE
+* KEY{KEYNAME}=VALUE
+* ACTION<3>=REPLACE INFORMATION
+* KEY{KEYNAME}=VALUE * VALUE OUT FOR MULTIPLE REPLACES
+* KEY{KEYNAME}(OPTIONS)
+* OPTIONS
+* - ADD - ADD KEY IF IT DOES NOT EXIST
+        SELECTION.CRITERIA=ACTION<2>
+        GOSUB xml.selection
+        IF TAG.FOUND THEN
+            KEY.CRITERIA=ACTION<3>
+            GOSUB xml.key.selection
+            OUT.OBJ=KEYS.INFO
+        END ELSE
+            ERR=-1
+            ERR<2>='NO ITEMS FOUND'
+        END
+    CASE PARSE.ACTION<1>='DELETE'
+        SELECTION.CRITERIA=ACTION<2>
+        GOSUB xml.selection
+        IF TAG.FOUND THEN
+            KEY.CRITERIA=ACTION<3>
+            GOSUB xml.key.selection
+            OUT.OBJ=KEYS.INFO
+        END ELSE
+            ERR=-1
+            ERR<2>='NO ITEMS FOUND'
+        END
+    CASE ACTION<1>='RETRIEVE'
+        SELECTION.CRITERIA=ACTION<2>; GOSUB xml.selection
+        IF TAG.FOUND THEN
+* WE FOUND OUR TAG *
+            KEY.CRITERIA=ACTION<3>
+            GOSUB xml.key.selection
+            OUT.OBJ=KEYS.INFO
+        END ELSE
+            ERR=-1
+            ERR<2>='Selection not found'
+        END
+    END CASE
+    RETURN
+*
+*JBASE*parse.xml:*
+PARSE.XML:; *; *JBASE
+    CNTR=0
+    KEYS=''
+    VALUES=''
+    KEY.CNTR=0
+    CONFIG=''
+    NEST.LEVEL=''
+    LINK.CNTR=0
+    CONVERT CHAR(254) TO CHAR(13) IN HTML
+    LINE.NO=OCONV('','U50BB')
+    LINE.NO=FIELD(LINE.NO,' ',1)
+    L=LEN(HTML)
+    IN.COMMAND=0
+    CMND=''
+    JUST.HTML=''
+*OPEN 'SYSTEM.FACTS' TO FILE ELSE RETURN
+*READ HTML.COMMANDS FROM FILE, 'HTML.COMMANDS' ELSE RETURN
+    FOUND.KEY=''; FIRST.KEY=''
+    JUST.HTML=''
+    DOING.SCRIPT=0
+    LAST.COMMAND=''
+    LAST.COMMAND.ENDING=''
+    CALL MVXMLPARSE.UNIQUE(SYSTEM19)
+    XML.ID=SYSTEM19
+*PRINT 'LENGTH = ':L
+    FOR X=1 TO L
+        C=HTML[X,1]
+        BAD.CHAR=0
+        NEXT.CHAR=HTML[X,20]
+        TEST.DATA=HTML[X-200,400]
+*        IF INDEX(TEST.DATA,'FUNCTION GETFILTEREDSECONDLOANPROGLIST',1) THEN DO.DEBUG=1 ELSE DO.DEBUG=0
+        CONVERT CHAR(13):CHAR(10) TO '' IN NEXT.CHAR
+        BEGIN CASE
+        CASE HTML[X,4]='<!--' ;* COMMENT, WE NEED TO DO SOME SPECIAL WORK
+            AFT.HTML=HTML[X,LEN(HTML)]
+            END.POS=INDEX(AFT.HTML,'-->',1)
+            IF END.POS THEN
+                COMMENT=AFT.HTML[1,END.POS+2]
+                KEY.CNTR=KEY.CNTR+1
+                CONFIG<1,KEY.CNTR>='JUST.HTML'
+                CONFIG<2,KEY.CNTR>=COMMENT
+                OUT.LVL=NEST.LEVEL<1>
+                CONVERT CHAR(253) TO '.' IN OUT.LVL
+                CONFIG<5,KEY.CNTR>=OUT.LVL
+                CONFIG<6,KEY.CNTR>=XML.ID:'.':KEY.CNTR
+                X=X+END.POS+1
+                NEW.DATA=HTML[X,5]
+                TEST.DATA=HTML[X-1,6]
+                CONVERT CHAR(13) TO '.' IN TEST.DATA
+                CONVERT CHAR(13) TO '.' IN NEW.DATA
+                BAD.CHAR=1
+            END
+        CASE HTML[X,2]='<!'   ;* special cdata sections
+            AFT.HTML=HTML[X,LEN(HTML)]
+            END.POS=INDEX(AFT.HTML,']]>',1)
+            IF END.POS THEN
+                CDATA=AFT.HTML[1,END.POS+2]
+                KEY.CNTR=KEY.CNTR+1
+                CONFIG<1,KEY.CNTR>='!'
+                CONFIG<2,KEY.CNTR>=CDATA
+                OUT.LVL=NEST.LEVEL<1>
+                CONVERT CHAR(253) TO '.' IN OUT.LVL
+                CONFIG<5,KEY.CNTR>=OUT.LVL
+                CONFIG<6,KEY.CNTR>=XML.ID:'.':KEY.CNTR
+                X=X+END.POS+1
+                BAD.CHAR=1
+            END
+        CASE (C='<' AND NOT(DOING.SCRIPT)) OR (C='<' AND HTML[X,8]='</SCRIPT')
+            IN.COMMAND=1
+            DOING.SCRIPT=0
+            IF TRIM(JUST.HTML) <> '' THEN
+                KEY.CNTR=KEY.CNTR+1
+                CONFIG<1,KEY.CNTR>='JUST.HTML'
+                CONFIG<2,KEY.CNTR>=JUST.HTML
+                OUT.LVL=NEST.LEVEL<1>
+                CONVERT CHAR(253) TO '.' IN OUT.LVL
+                CONFIG<5,KEY.CNTR>=OUT.LVL
+                CONFIG<6,KEY.CNTR>=XML.ID:'.':KEY.CNTR
+                JUST.HTML=''
+            END
+        CASE C='>' AND NOT(DOING.SCRIPT)
+            IN.COMMAND=0
+            CMND=CMND:C
+            IF INDEX(CMND,'<SCRIPT',1) THEN DOING.SCRIPT=1
+            IF INDEX(CMND,'</SCRIPT',1) THEN DOING.SCRIPT=0
+            KEY.CNTR=KEY.CNTR+1
+            GOSUB 100
+            CMND=''
+            BAD.CHAR=1
+            FIRST.KEY=''; FOUND.KEY=''
+            IF HTML[X+1,1] <> '<' THEN
+* WE HAVE A JUST.HTML SECTION. LETS PULL THIS OUT
+* AS A BLOCK LOOKING FOR THE NEXT < IN THE HTML
+                AFT.HTML=HTML[X+1,LEN(HTML)]
+                END.POS=INDEX(AFT.HTML,'<',1)
+                IF END.POS THEN
+                    JUST.HTML=AFT.HTML[1,END.POS-1]
+                    KEY.CNTR=KEY.CNTR+1
+                    CONFIG<1,KEY.CNTR>='JUST.HTML'
+                    CONFIG<2,KEY.CNTR>=JUST.HTML
+                    OUT.LVL=NEST.LEVEL<1>
+                    CONVERT CHAR(253) TO '.' IN OUT.LVL
+                    CONFIG<5,KEY.CNTR>=OUT.LVL
+                    CONFIG<6,KEY.CNTR>=XML.ID:'.':KEY.CNTR
+                    JUST.HTML=''
+                    X=X+END.POS-1
+                END
+            END
+        END CASE
+        IF IN.COMMAND THEN
+            CMND=CMND:C
+        END ELSE
+            IF NOT(BAD.CHAR) THEN
+                JUST.HTML=JUST.HTML:C
+            END
+        END
+*   IF DO.DEBUG THEN
+*     PRINT TEST.DATA
+*     PRINT NEXT.CHAR
+*     PRINT '--> ':C:' - SEQ ':SEQ(C):; INPUT WAIT
+*   END
+    NEXT X
+    IF TRIM(JUST.HTML) <> '' THEN
+        KEY.CNTR=KEY.CNTR+1
+        CONFIG<1,KEY.CNTR>='JUST.HTML'
+        CONFIG<2,KEY.CNTR>=JUST.HTML
+        OUT.LVL=NEST.LEVEL<1>
+        CONVERT CHAR(253) TO '.' IN OUT.LVL
+        CONFIG<5,KEY.CNTR>=OUT.LVL
+        CONFIG<6,KEY.CNTR>=XML.ID:'.':KEY.CNTR
+        JUST.HTML=''
+    END
+*OPEN 'RESULT.FILE' TO RESULT.FILE ELSE RETURN
+*WRITE CONFIG ON RESULT.FILE, 'PARSE.ALL.HTML'
+    RETURN
+100:      * evaulate commands
+    CONVERT '<>' TO '' IN CMND
+    TVC=0
+    TVALUES=''
+    VALUE.CNTR=0
+    LOOP
+        POS=INDEX(CMND," = '",1)
+    UNTIL NOT(POS) DO
+* OK, WE HAVE A BAD HTLM STATEMENT, LETS FIX IT *
+        PRE.CMND=CMND[1,POS-1]
+        AFT.CMND=CMND[POS+3,LEN(CMND)]
+        CMND=PRE.CMND:'=':AFT.CMND
+    REPEAT
+    LL=LEN(CMND)
+    IN.QUOTE=0
+    CCMND=''
+    FOUND.KEY=''
+    FIRST.KEY=''
+    QUOTE.CHAR='"'
+    TEMP.SPACE=0    ;* BUG FIX FOR BAD HTML, I.E VALUE='TEST'NAME=ARGG (NO SPACE)
+    AUTO.ENDING=0
+    IF CMND[LEN(CMND),1]='/' THEN
+* WE HAVE A AUTO-ENDING GROUP HERE, LETS STRIP THIS OFF
+        CMND=CMND[1,LEN(CMND)-1]
+        AUTO.ENDING=1
+    END
+    FOR XX=1 TO LL
+        CC=CMND[XX,1]
+*JBASE*        IF @USER.NO = 6 AND 1=2 THEN
+        IF @USER.NO = 6 AND @FALSE THEN; *JBASE
+            PRINT '-------------------------------'
+            PRINT 'XX=X'
+            PRINT 'XX=':X
+            PRINT 'CC=':CC
+        END
+        BEGIN CASE
+        CASE TEMP.SPACE
+* BUG FIX FOR BAD HTML
+            GOSUB 200
+            TEMP.SPACE=0
+        CASE CC=' ' AND NOT(IN.QUOTE)
+* WE HAVE A COMMAND
+            GOSUB 200
+        CASE NOT(IN.QUOTE) AND (CC='"' OR CC="'")
+            QUOTE.CHAR=CC
+            IN.QUOTE=1
+            CCMND=CCMND:CC
+        CASE IN.QUOTE AND CC=QUOTE.CHAR
+            IN.QUOTE=0
+            CCMND=CCMND:CC
+            NEXT.CHAR=CMND[XX+1,1]
+            IF XX+1 <= LL AND NEXT.CHAR <> ' ' THEN
+                TEMP.SPACE=1
+                GOSUB 200
+                TEMP.SPACE=0
+            END
+        CASE 1
+            CCMND=CCMND:CC
+        END CASE
+*JBASE*        IF @USER.NO = 6 AND 1=2 THEN
+        IF @USER.NO = 6 AND @FALSE THEN; *JBASE
+            PRINT 'AT END OF STATEMENT'
+            PRINT 'CCMND=':CCMND
+            PRINT '<CONTINUE2>':; INPUT WAIT
+        END
+    NEXT XX
+    GOSUB 200
+    IF AUTO.ENDING THEN
+        CCMND='/'
+        GOSUB 200
+    END
+** OK, NOW EVALUTE WHAT WE GOT
+    IF FOUND.KEY='' THEN FOUND.KEY=FIRST.KEY
+    CONFIG<1,KEY.CNTR>=FOUND.KEY
+* NOW FIGURE OUT OUR NESTING LEVEL INFORMATION *
+    GOSUB xml.build.nest.level
+    CONFIG<5,KEY.CNTR>=OUT.LVL
+    CONFIG<6,KEY.CNTR>=XML.ID:'.':KEY.CNTR        ;* SET KEY CONTROL
+    RETURN
+*PRINT FIRST.KEY,CONFIG<5,KEY.CNTR>
+    INPUT WAIT
+200       * OK, EVALUATE OUR COMMAND NOW *
+    IF TRIM(CCMND)='' THEN
+        CCMND=''
+        RETURN
+    END
+    DEL.POS=INDEX(CCMND,'=',1)
+    IF DEL.POS THEN
+        V.KEY=TRIM(CCMND[1,DEL.POS-1])
+        VALUE=CCMND[DEL.POS+1,LEN(CCMND)]
+    END ELSE
+        V.KEY=CCMND
+        VALUE=''
+    END
+    IF VALUE[1,1]='"' OR VALUE[1,1]="'" THEN
+        VALUE=TRIM(VALUE)
+        VALUE=VALUE[2,LEN(VALUE)]
+        VALUE=VALUE[1,LEN(VALUE)-1]
+    END
+    TVC=TVC+1
+    IF TVC=1 THEN FIRST.KEY=V.KEY
+*LOCATE KEY IN HTML.COMMANDS SETTING FOUND.POS ELSE FOUND.POS=0
+*IF FOUND.POS THEN FOUND.KEY=KEY
+    FOUND.POS=0; FOUND.KEY=''
+    CONFIG<2,KEY.CNTR,TVC>=V.KEY
+    CONFIG<3,KEY.CNTR,TVC>=VALUE
+    IF DEL.POS THEN CONFIG<4,KEY.CNTR,TVC>=1 ELSE CONFIG<4,KEY.CNTR,TVC>=0
+    CCMND=''
+    RETURN
+*
+xml.selection:      *
+*
+    SEARCH.TAG=''
+    SEARCH.KEYS=''
+    NUMBER.SELECTION=DCOUNT(SELECTION.CRITERIA<1>,CHAR(253))
+    VALUE.CNTR=0
+    FOR X=1 TO NUMBER.SELECTION
+        SELECTION=SELECTION.CRITERIA<1,X>
+*   SELECTION.TYPE=FIELD(SELECTION,'{',1)
+*   SELECTION.NAME=FIELD(SELECTION.NAME,'{',2)
+*   SELECTION.NAME=FIELD(SELECTION.NAME,'}',1)
+*   SELECTION.OPTION=FIELD(SELECTION,'(',2)
+*   SELECTION.OPTION=FIELD(SELECTION.OPTION,')',1)
+*   SELECTION.VALUE=FIELD(SELECTION,'=',2)
+        SELECTION.SEQ=FIELD(SELECTION,'[',2)
+        SELECTION.SEQ=FIELD(SELECTION.SEQ,']',1)
+        IF SELECTION.SEQ='' OR NOT(NUM(SELECTION.SEQ)) OR SELECTION.SEQ='0' THEN
+            SELECTION.SEQ=1
+        END
+        SELECTION.TAG=FIELD(SELECTION,'<',2)
+        SELECTION.TAG=FIELD(SELECTION.TAG,'>',1)
+        SELECTION.KEY=FIELD(SELECTION,'(',2)
+        SELECTION.KEY=FIELD(SELECTION.KEY,')',1)
+        SELECTION.VALUE=FIELD(SELECTION,'=',2)
+        SEARCH.TAG<1,X>=SELECTION.TAG
+        SEARCH.TAG<2,X>=SELECTION.KEY
+        SEARCH.TAG<3,X>=SELECTION.VALUE
+        SEARCH.TAG<4,X>=SELECTION.SEQ
+        SEARCH.TAG<5,X>=''    ;* WORK AREA TO KNOW HOW MANY WE HAVE FOUND
+*   PRINT 'Tag ':SELECTION.TAG:' Key ':SELECTION.KEY:' = ':SELECTION.VALUE
+    NEXT X
+    XML.FOUND=0
+    NUMBER.ELEMENTS=DCOUNT(IN.OBJ<1>,CHAR(253))
+IF DO.DEBUG THEN PRINT 'NUMBER ELEMENTS=':NUMBER.ELEMENTS
+    TAG.FOUND=0
+    FOR X=1 TO NUMBER.ELEMENTS UNTIL TAG.FOUND
+        TAG=IN.OBJ<1,X>
+IF DO.DEBUG THEN    PRINT 'Checking tag ':TAG
+        FOR S=1 TO NUMBER.SELECTION
+            THIS.TAG=SEARCH.TAG<1,S>
+            THIS.KEY=SEARCH.TAG<2,S>
+            THIS.VALUE=SEARCH.TAG<3,S>
+            THIS.SEQ=SEARCH.TAG<4,S>
+            CURR.SEQ=SEARCH.TAG<5,S>
+IF DO.DEBUG THEN     PRINT '** matching ':TAG:' to ':THIS.TAG
+            IF THIS.TAG=TAG THEN
+IF DO.DEBUG THEN        PRINT 'Found ':TAG:' in xml ':X:' and search ':S
+                IF THIS.KEY = '' THEN
+                    TAG.FOUND=X
+                END ELSE
+                    LOCATE THIS.KEY IN IN.OBJ<2,X> SETTING SUB.POS ELSE SUB.POS=0
+                    IF SUB.POS THEN
+IF DO.DEBUG THEN           PRINT 'Found key ':THIS.KEY:' at ':SUB.POS
+                        CHECK.VALUE=IN.OBJ<3,X,SUB.POS>
+IF DO.DEBUG THEN           PRINT 'Match ':THIS.VALUE:' against ':CHECK.VALUE
+                        IF CHECK.VALUE = THIS.VALUE THEN
+IF DO.DEBUG THEN              PRINT 'Match!'
+                            TAG.FOUND=X
+                        END
+                    END
+                END
+            END
+            IF TAG.FOUND THEN
+* VERIFY THIS IS THE SEQUENCE WE WANT
+                CURR.SEQ=CURR.SEQ+1
+                IF CURR.SEQ=THIS.SEQ THEN
+* WE ARE OK
+                END ELSE
+                    TAG.FOUND=0
+                END
+                SEARCH.TAG<5,S>=CURR.SEQ
+            END
+        NEXT S
+    NEXT X
+    RETURN
+*
+xml.key.selection:  *
+    KEYS.INFO=''
+    NUMBER.KEYS=DCOUNT(KEY.CRITERIA<1>,CHAR(253))
+    FOR X=1 TO NUMBER.KEYS
+        KEY.LINE=KEY.CRITERIA<1,X>
+        IF KEY.LINE[1,1]='@' THEN
+            THIS.KEY=KEY.LINE
+            THIS.VALUE=''
+        END ELSE
+            THIS.KEY=FIELD(KEY.LINE,'(',2)
+            THIS.KEY=FIELD(THIS.KEY,')',1)
+            THIS.VALUE=FIELD(KEY.LINE,'=',2)
+            THIS.KEY.HAS.EQUAL=INDEX(KEY.LINE,'=',1)
+            CALL MVXMLPARSE.CONVERTHTML('IN',THIS.VALUE)
+        END
+        LOCATE THIS.KEY IN IN.OBJ<2,TAG.FOUND> SETTING KEY.POS ELSE KEY.POS=0
+        KEYS.INFO<1,X>=THIS.KEY
+        IF THIS.KEY='@INNERHTML@' THEN
+* THIS IS A SPECIAL SELECTION THAT WILL PULL OUT ALL JUST HTML IN THIS ITEM
+            INNER.END.OF.TAG=0
+            INNER.TAG=IN.OBJ<1,TAG.FOUND>
+            INNER.TAG='/':INNER.TAG
+            INNER.HTML=''
+            FOR INNER.CNTR=TAG.FOUND+1 TO NUMBER.ELEMENTS UNTIL INNER.END.OF.TAG
+                THIS.INNER.TAG=IN.OBJ<1,INNER.CNTR>
+                BEGIN CASE
+                CASE THIS.INNER.TAG='JUST.HTML'
+                    INNER.HTML:=IN.OBJ<2,INNER.CNTR>
+                CASE THIS.INNER.TAG=INNER.TAG
+                    INNER.END.OF.TAG=1
+                END CASE
+                KEYS.INFO<2,X>=INNER.HTML
+            NEXT INNER.CNTR
+        END ELSE
+            IF PARSE.ACTION<1>='REPLACE' AND PARSE.ACTION<2>='ADD' AND NOT(KEY.POS) THEN
+* WE ARE GOING TO ADD THIS KEY
+                XXX=DCOUNT(IN.OBJ<2,TAG.FOUND>,CHAR(252))
+                IF IN.OBJ<2,TAG.FOUND,XXX>='/' THEN
+                    IN.OBJ=INSERT(IN.OBJ,2,TAG.FOUND,XXX,THIS.KEY)
+                    LOCATE THIS.KEY IN IN.OBJ<2,TAG.FOUND> SETTING KEY.POS ELSE RETURN
+                END ELSE
+                    IN.OBJ<2,TAG.FOUND,-1>=THIS.KEY
+                    KEY.POS=DCOUNT(IN.OBJ<2,TAG.FOUND>,CHAR(252))
+                END
+            END
+            IF KEY.POS THEN
+                IF PARSE.ACTION<1>='REPLACE' THEN
+                    IN.OBJ<3,TAG.FOUND,KEY.POS>=THIS.VALUE
+                    IF THIS.KEY.HAS.EQUAL THEN
+                        IN.OBJ<4,TAG.FOUND,KEY.POS>=1
+                    END
+*          PRINT 'REPLACING WITH ':THIS.VALUE
+                END
+                IF PARSE.ACTION<1>='DELETE' THEN
+                    IN.OBJ=DELETE(IN.OBJ,3,TAG.FOUND,KEY.POS)
+                    IN.OBJ=DELETE(IN.OBJ,2,TAG.FOUND,KEY.POS)
+                END ELSE
+                    FOUND.DATA=IN.OBJ<3,TAG.FOUND,KEY.POS>
+                    CALL MVXMLPARSE.CONVERTHTML('OUT',FOUND.DATA)
+                    KEYS.INFO<2,X>=FOUND.DATA
+                    KEYS.INFO<1,X>=IN.OBJ<2,TAG.FOUND,KEY.POS>
+                    KEYS.INFO<3,X>=KEY.POS
+                    KEYS.INFO<4,X>=IN.OBJ<6,TAG.FOUND>
+                END
+            END
+        END
+    NEXT X
+    RETURN
+*
+rebuild.xml:        *
+    NEW.HTML=''
+*
+    OPTIONS=''
+    HTML=''
+    NUM.OPTIONS=DCOUNT(OPTIONS,CHAR(254))
+    QC='"'
+    SHOWBLANK=0
+    FOR X=1 TO NUM.OPTIONS
+        LINE=OPTIONS<X>
+        TAG=LINE<1,1>
+        V.VAR=FIELD(TAG,'=',1)
+        VAL=FIELD(TAG,'=',2)
+        BEGIN CASE
+        CASE V.VAR='QUOTE'
+            QC=VAL
+        CASE V.VAR='SHOWBLANK'
+            SHOWBLANK=1
+        END CASE
+    NEXT X
+    NUM.ENTRIES=DCOUNT(CONFIG<1>,CHAR(253))
+    LINE1=DCOUNT(CONFIG<1>,CHAR(253))
+    LINE2=DCOUNT(CONFIG<2>,CHAR(253))
+    FOR X=1 TO NUM.ENTRIES
+        TYPE.OF.ENTRY=CONFIG<1,X>
+        BEGIN CASE
+        CASE TYPE.OF.ENTRY='JUST.HTML' OR TYPE.OF.ENTRY='INSERTION' OR TYPE.OF.ENTRY='!'
+            INSERT.HTML=CONFIG<2,X>
+            UPPER.HTML=OCONV(INSERT.HTML,'MCU')
+            POS=INDEX(UPPER.HTML,'<HEAD>',1)
+            IF POS THEN
+                PRE.HTML=INSERT.HTML[1,POS+5]
+                AFT.HTML=INSERT.HTML[POS+6,LEN(INSERT.HTML)]
+                MSG=INSERT.MESSAGE
+                CONVERT CHAR(254) TO CHAR(13) IN MSG
+                INSERT.HTML=PRE.HTML:CHAR(10):MSG:CHAR(10):AFT.HTML
+            END
+            NEW.HTML=NEW.HTML:INSERT.HTML
+        CASE TRIM(TYPE.OF.ENTRY)=''; NULL
+        CASE 1
+            GOSUB rebuild.xml.100
+        END CASE
+        IF X=NUM.ENTRIES THEN
+            TMP1=CONFIG<1,X>
+            TMP2=CONFIG<2,X>
+        END
+    NEXT X
+    HTML=NEW.HTML
+    HTML=TRIM(HTML,CHAR(13))
+    CONVERT CHAR(13) TO CHAR(254) IN HTML
+    CONVERT CHAR(10) TO CHAR(254) IN HTML
+    RETURN
+rebuild.xml.100:    *
+    NUM.KEYS=DCOUNT(CONFIG<2,X>,CHAR(252))
+    IF NUM.KEYS=1 AND TRIM(CONFIG<2,X,1>) = '' THEN RETURN  ;* NO ENTRY
+    NEW.HTML=NEW.HTML:'<'
+    FOR K=1 TO NUM.KEYS
+        V.KEY=CONFIG<2,X,K>
+        IF TRIM(V.KEY)<>'' THEN
+            VALUE=CONFIG<3,X,K>
+            DO.EQUAL=CONFIG<4,X,K>
+            IF K<>1 THEN NEW.HTML=NEW.HTML:' '
+            NEW.HTML=NEW.HTML:V.KEY
+            IF DO.EQUAL OR VALUE<>'' THEN
+                BEGIN CASE
+                CASE INDEX(VALUE,"'",1); VALUE='"':VALUE:'"'
+                CASE INDEX(VALUE,'"',1); VALUE="'":VALUE:"'"
+                CASE INDEX(VALUE,' ',1); VALUE=QC:VALUE:QC
+                CASE 1; VALUE=QC:VALUE:QC
+                END CASE
+                NEW.HTML=NEW.HTML:'=':VALUE
+            END
+        END
+    NEXT K
+    NEW.HTML=NEW.HTML:'>'
+    RETURN
+*
+*JBASE*pull.node:*
+PULL.NODE:; *; *JBASE
+*
+    LEVEL.NUM=DCOUNT(LEVEL.INFO,'.')
+    NUMBER.ENTRIES=DCOUNT(IN.OBJ<1>,CHAR(253))
+    TEMP.NODE=''
+    TEMP.NODE.CNTR=0
+    NEW.IN.OBJ=''
+    NEW.IN.OBJ.CNTR=0
+    FOR PULL.NODE.CNTR=1 TO NUMBER.ENTRIES
+        TAG.LEVEL=IN.OBJ<5,PULL.NODE.CNTR>
+        CHECK.TAG=FIELD(TAG.LEVEL,'.',1,LEVEL.NUM)
+*   PRINT 'Checking ':TAG.LEVEL:' against ':LEVEL.INFO:
+*   PRINT ' ':IN.OBJ<1,PULL.NODE.CNTR>
+        TEMP.FOUND.ENTRY=0
+        IF CHECK.TAG = LEVEL.INFO THEN
+            IF SUB.OPTION='CHILDONLY' AND LEVEL.INFO=TAG.LEVEL AND IN.OBJ<1,PULL.NODE.CNTR> <> 'JUST.HTML' THEN NULL ELSE
+                TEMP.FOUND.ENTRY=1
+                TEMP.NODE.CNTR=TEMP.NODE.CNTR+1
+                FOR PULL.NODE.A=1 TO TREE.DEPTH
+                    TEMP.NODE<PULL.NODE.A,TEMP.NODE.CNTR>=IN.OBJ<PULL.NODE.A,PULL.NODE.CNTR>
+                NEXT PULL.NODE.A
+            END
+*     PRINT 'CHECKING ':TAG.LEVEL:' against ':LEVEL.INFO
+*     PRINT 'TAG: ':IN.OBJ<1,PULL.NODE.CNTR>
+*     PRINT 'USED: ':TEMP.FOUND.ENTRY
+*     DEBUG
+        END
+        BEGIN CASE
+        CASE NOT(TEMP.FOUND.ENTRY); KEEP.XML=1
+        CASE SUB.ACTION='DELETE'; KEEP.XML=0
+        CASE 1; KEEP.XML=1
+        END CASE
+        IF KEEP.XML THEN
+            NEW.IN.OBJ.CNTR=NEW.IN.OBJ.CNTR+1
+            FOR PULL.NODE.A=1 TO TREE.DEPTH
+                NEW.IN.OBJ<PULL.NODE.A,NEW.IN.OBJ.CNTR>=IN.OBJ<PULL.NODE.A,PULL.NODE.CNTR>
+            NEXT PULL.NODE.A
+        END
+    NEXT PULL.NODE.CNTR
+    IN.OBJ=NEW.IN.OBJ
+    NEW.IN.OBJ=''
+    RETURN
+*
+xml.build.nest.level:         *
+*
+* NOW FIGURE OUT OUR NESTING LEVEL INFORMATION *
+    LVL=DCOUNT(NEST.LEVEL<1>,CHAR(253))
+    IF FIRST.KEY[1,1]='/' THEN USE.FIRST.KEY=FIRST.KEY[2,LEN(FIRST.KEY)] ELSE USE.FIRST.KEY=FIRST.KEY
+    IF ACTION<1>='XXX' THEN
+*   PRINT 'Firstkey=':FIRST.KEY:'  AUTOENDING=':AUTO.ENDING
+    END
+    DELETE.THIS.NEST=0
+    BEGIN CASE
+    CASE FIRST.KEY='?XML'
+        NEST.LEVEL=1
+        NEST.LEVEL<2>='?XML'
+        NEST.LEVEL<3>=1
+    CASE NEST.LEVEL=''
+        NEST.LEVEL=1
+        NEST.LEVEL<2>=FIRST.KEY
+    CASE NEST.LEVEL<2,LVL-1> = USE.FIRST.KEY AND FIRST.KEY[1,1]='/'
+* GO BACK A LEVEL *
+        NEST.LEVEL=DELETE(NEST.LEVEL,1,LVL)
+        NEST.LEVEL=DELETE(NEST.LEVEL,2,LVL)
+        NEST.LEVEL=DELETE(NEST.LEVEL,3,LVL)
+        NEST.LEVEL<3,LVL-1>=1
+    CASE NEST.LEVEL<2,LVL>=USE.FIRST.KEY AND FIRST.KEY[1,1]='/'
+* KEEP AT SAME LEVEL? *
+        NEST.LEVEL<3,LVL>=1
+    CASE AUTO.ENDING AND NEST.LEVEL<3,LVL> <> 1
+        NEST.LEVEL<1,LVL+1>=1
+        NEST.LEVEL<2,LVL+1>=FIRST.KEY
+        NEST.LEVEL<3,LVL+1>=1
+*      DELETE.THIS.NEST=1
+    CASE NEST.LEVEL<3,LVL>=1
+* SAME LEVEL
+        NEST.LEVEL<1,LVL>=NEST.LEVEL<1,LVL>+1
+        NEST.LEVEL<2,LVL>=FIRST.KEY
+        NEST.LEVEL<3,LVL>=AUTO.ENDING
+    CASE 1
+        NEST.LEVEL<1,LVL+1>=1
+        NEST.LEVEL<2,LVL+1>=FIRST.KEY
+    END CASE
+    LVL=DCOUNT(NEST.LEVEL<1>,CHAR(253))
+    OUT.LVL=NEST.LEVEL<1>
+    CONVERT CHAR(253) TO '.' IN OUT.LVL
+    IF DELETE.THIS.NEST THEN
+        NEST.LEVEL=DELETE(NEST.LEVEL,1,LVL)
+        NEST.LEVEL=DELETE(NEST.LEVEL,2,LVL)
+        NEST.LEVEL=DELETE(NEST.LEVEL,3,LVL)
+    END
+    IF ACTION<1>='XXX' THEN
+        NUMBER.NEST=DCOUNT(NEST.LEVEL<1>,CHAR(253))
+        FOR XX=1 TO NUMBER.NEST
+            PRINT NEST.LEVEL<1,XX>"L(#5)":' ':
+            PRINT NEST.LEVEL<2,XX>"L(#20)":' ':
+            PRINT NEST.LEVEL<3,XX>
+        NEXT XX
+        INPUT WAIT
+    END
+*PRINT FIRST.KEY,OUT.LVL:; INPUT WAIT
+    RETURN
+expand.tag:         *
+* THIS CODE WILL EXPAND OUT <tag /> to <tag></tag> to allow
+* insertion of innerhtml work
+*
+    LOCATE '/' IN IN.OBJ<2,TAG.FOUND> SETTING ENDING.BLOCK ELSE ENDING.BLOCK=0  ;* NO ENDING
+    IF ENDING.BLOCK=0 THEN RETURN
+* ok, we have a ending block, lets insert a new tag after this one and remove
+* the ending data
+    NEW.TAG.POS=TAG.FOUND+1
+    FOR A=1 TO TREE.DEPTH
+        IN.OBJ=INSERT(IN.OBJ,A,NEW.TAG.POS;'')
+    NEXT A
+    IN.OBJ<1,NEW.TAG.POS>='/':IN.OBJ<1,TAG.FOUND>
+    IN.OBJ<2,NEW.TAG.POS>='/':IN.OBJ<1,TAG.FOUND>
+    IN.OBJ<4,NEW.TAG.POS>=0
+    IN.OBJ<5,NEW.TAG.POS>=IN.OBJ<5,TAG.FOUND>
+    CALL MVXMLPARSE.UNIQUE(SYSTEM19)
+    IN.OBJ<6,NEW.TAG.POS>=SYSTEM19
+    IN.OBJ=DELETE(IN.OBJ,2,TAG.FOUND,ENDING.BLOCK)
+    IN.OBJ=DELETE(IN.OBJ,3,TAG.FOUND,ENDING.BLOCK)
+*CALL MVXMLPARSE.API('VERIFY','',IN.OBJ,OUT.OBJ,ERR)
+    RETURN
